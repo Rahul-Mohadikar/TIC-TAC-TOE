@@ -12,45 +12,17 @@ jobs:
         uses: actions/checkout@v2
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-      - name: Build and analyze with SonarQube
-        uses: sonarsource/sonarqube-scan-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      - name: npm install dependencies
-        run: npm install
-      - name: Install trivy 
+      - name: Deploy to container
         run: |
-          trivy fs . > trivyfs.txt
-      - name: docker build and push
-        run: |
-          docker build -t tic-tac-toe .
-          docker tag tic-tac-toe rahul70/tic-tac-toe:latest
-          docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
-          docker push rahul70/tic-tac-toe:latest
-        env:
-          DOCKER_CLI_ACI: 1
-      - name: trivy image scan
-        run: |
-          trivy image rahul70/tic-tac-toe:latest > trivyimage.txt
-  deploy:
-    needs: build-analyze-scan
-    runs-on: [self-hosted]
-    steps:
-      - name: pull docker image
-        run: docker pull rahul70/tic-tac-toe:latest
-      - name: Image scan
-        run: trivy image rahul70/tic-tac-toe:latest > trivyimagedeploy.txt
-      - name: run the container
-        run: docker run -d --name ticgame -p 3000:3000 rahul70/tic-tac-toe:latest
-      - name: update kubeconfig
-        run: aws eks --region us-east-1 update-kubeconfig --name EKS_CLOUD 
-      - name: deploy to kubernetes
-        run: |
-          kubectl apply -f deployment-service.yml
-      - name: send a slack notification
+          docker stop game
+          docker rm game
+      - name: Update kubeconfig
+        run: aws eks --region us-east-1 update-kubeconfig --name EKS_CLOUD
+      - name: Deploy to kubernetes
+        run: kubectl delete -f deployment-service.yml
+      - name: Send a Slack Notification
         if: always()
-        uses: act10ns/slack@v2
+        uses: act10ns/slack@v1
         with:
           status: ${{ job.status }}
           steps: ${{ toJson(steps) }}
