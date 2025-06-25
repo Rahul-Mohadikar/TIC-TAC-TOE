@@ -1,26 +1,59 @@
-name: Build
-
+name: Build,Analyze,scan
 on:
   push:
     branches:
       - main
-
-
 jobs:
-  build:
+  build-analyze-scan:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted]
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v2
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-      - uses: sonarsource/sonarqube-scan-action@master
+      - name: Build and analyze with SonarQube
+        uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      # If you wish to fail your job when the Quality Gate is red, uncomment the
-      # following lines. This would typically be used to fail a deployment.
-      # - uses: sonarsource/sonarqube-quality-gate-action@master
-      #   timeout-minutes: 5
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: npm install dependencies
+        run: npm install
+      - name: Install trivy 
+        run: |
+          trivy fs . > trivyfs.txt
+      - name: docker build and push
+        run: |
+          docker build -t tic-tac-toe .
+          docker tag tic-tac-toe rahul70/tic-tac-toe:latest
+          docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker push rahul70/tic-tac-toe:latest
+        env:
+          DOCKER_CLI_ACI: 1
+      - name: trivy image scan
+        run: |
+          trivy image rahul70/tic-tac-toe:latest > trivyimage.txt
+  deploy:
+    needs: build-analyze-scan
+    runs-on: [self-hosted]
+    steps:
+      - name: pull docker image
+        run: docker pull rahul70/tic-tac-toe:latest
+      - name: Image scan
+        run: trivy image rahul70/tic-tac-toe:latest > trivyimagedeploy.txt
+      - name: run the container
+        run: docker run -d --name ticgame -p 3000:3000 rahul70/tic-tac-toe:latest
+      - name: update kubeconfig
+        run: aws eks --region us-east-1 update-kubeconfig --name EKS_CLOUD 
+      - name: deploy to kubernetes
+        run: |
+          kubectl apply -f deployment-service.yaml
+      - name: send a slack notification
+        if: always()
+        uses: actions/slack@v2
+        with:
+          status: ${{ job.status }}
+          steps: ${{ toJson(steps) }}
+          channel: '#general'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
